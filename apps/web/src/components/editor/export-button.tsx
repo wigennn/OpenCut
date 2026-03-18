@@ -286,6 +286,11 @@ function ExportError({
 	onRetry: () => void;
 }) {
 	const [copied, setCopied] = useState(false);
+	const isWebCodecsMissing =
+		/error/i.test(error) &&
+		(/VideoEncoder is not supported by this browser/i.test(error) ||
+			/missing WebCodecs/i.test(error) ||
+			/VideoEncoder/i.test(error));
 
 	const handleCopy = async () => {
 		await navigator.clipboard.writeText(error);
@@ -298,6 +303,11 @@ function ExportError({
 			<div className="flex flex-col gap-1.5">
 				<p className="text-destructive text-sm font-medium">Export failed</p>
 				<p className="text-muted-foreground text-xs">{error}</p>
+				{isWebCodecsMissing && (
+					<p className="text-muted-foreground text-xs">
+						Tip: Try a WebCodecs-capable browser (latest Chrome/Edge). If you’re on Safari, export may work via MediaRecorder depending on your version.
+					</p>
+				)}
 			</div>
 
 			<div className="flex gap-2">
