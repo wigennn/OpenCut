@@ -3,10 +3,8 @@
 import { Separator } from "@/components/ui/separator";
 import { type Tab, useAssetsPanelStore } from "@/stores/assets-panel-store";
 import { TabBar } from "./tabbar";
-import { Captions } from "./views/captions";
 import { MediaView } from "./views/assets";
 import { SettingsView } from "./views/settings";
-import { SoundsView } from "./views/sounds";
 import { StickersView } from "./views/stickers";
 import { TextView } from "./views/text";
 import { EffectsView } from "./views/effects";
@@ -16,7 +14,6 @@ export function AssetsPanel() {
 
 	const viewMap: Record<Tab, React.ReactNode> = {
 		media: <MediaView />,
-		sounds: <SoundsView />,
 		text: <TextView />,
 		stickers: <StickersView />,
 		effects: <EffectsView />,
@@ -25,7 +22,6 @@ export function AssetsPanel() {
 				Transitions view coming soon...
 			</div>
 		),
-		captions: <Captions />,
 		filters: (
 			<div className="text-muted-foreground p-4">
 				Filters view coming soon...

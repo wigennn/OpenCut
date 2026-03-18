@@ -2,7 +2,6 @@
 
 import { ArrowRightIcon } from "lucide-react";
 import { useState } from "react";
-import ReactMarkdown from "react-markdown";
 import { SOCIAL_LINKS } from "@/constants/site-constants";
 import { useLocalStorage } from "@/hooks/storage/use-local-storage";
 import { Button } from "../ui/button";
@@ -57,7 +56,13 @@ export function Onboarding() {
 							<Title title={getStepTitle()} />
 							<Description description="There's still a ton of things to do to make this editor amazing." />
 							<Description description="A lot of features are still missing. We're working hard to build them out!" />
-							<Description description="If you're curious, check out our roadmap [here](https://opencut.app/roadmap)" />
+							<Description
+								description="If you're curious, check out our roadmap"
+								link={{
+									href: "https://opencut.app/roadmap",
+									label: "here",
+								}}
+							/>
 						</div>
 						<NextButton onClick={handleNext}>Next</NextButton>
 					</div>
@@ -68,7 +73,8 @@ export function Onboarding() {
 						<div className="space-y-3">
 							<Title title={getStepTitle()} />
 							<Description
-								description={`Join our [Discord](${SOCIAL_LINKS.discord}), chat with cool people and share feedback to help make OpenCut the best editor ever.`}
+								description="Join our Discord, chat with cool people and share feedback to help make OpenCut the best editor ever."
+								link={{ href: SOCIAL_LINKS.discord, label: "Discord" }}
 							/>
 						</div>
 						<NextButton onClick={handleClose}>Finish</NextButton>
@@ -95,26 +101,31 @@ function Title({ title }: { title: string }) {
 	return <h2 className="text-lg font-bold md:text-xl">{title}</h2>;
 }
 
-function Description({ description }: { description: string }) {
+function Description({
+	description,
+	link,
+}: {
+	description: string;
+	link?: { href: string; label: string };
+}) {
 	return (
 		<div className="text-muted-foreground">
-			<ReactMarkdown
-				components={{
-					p: ({ children }) => <p className="mb-0">{children}</p>,
-					a: ({ href, children }) => (
+			<p className="mb-0">
+				{description}
+				{link ? (
+					<>
+						{" "}
 						<a
-							href={href}
+							href={link.href}
 							target="_blank"
 							rel="noopener noreferrer"
 							className="text-foreground hover:text-foreground/80 underline"
 						>
-							{children}
+							{link.label}
 						</a>
-					),
-				}}
-			>
-				{description}
-			</ReactMarkdown>
+					</>
+				) : null}
+			</p>
 		</div>
 	);
 }
