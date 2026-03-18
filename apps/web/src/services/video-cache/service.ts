@@ -7,13 +7,21 @@ import {
 } from "mediabunny";
 
 interface VideoSinkData {
-	sink: CanvasSink;
+	mode: "mediabunny" | "html-video";
+
+	// mediabunny mode
+	sink: CanvasSink | null;
 	iterator: AsyncGenerator<WrappedCanvas, void, unknown> | null;
 	currentFrame: WrappedCanvas | null;
 	nextFrame: WrappedCanvas | null;
 	lastTime: number;
 	prefetching: boolean;
 	prefetchPromise: Promise<void> | null;
+
+	// html-video fallback mode
+	videoEl: HTMLVideoElement | null;
+	videoObjectUrl: string | null;
+	canvas: OffscreenCanvas | HTMLCanvasElement | null;
 }
 
 export class VideoCache {
@@ -33,6 +41,10 @@ export class VideoCache {
 
 		const sinkData = this.sinks.get(mediaId);
 		if (!sinkData) return null;
+
+		if (sinkData.mode === "html-video") {
+			return await this.getHtmlVideoFrameAt({ sinkData, time });
+		}
 
 		if (sinkData.nextFrame && sinkData.nextFrame.timestamp <= time) {
 			sinkData.currentFrame = sinkData.nextFrame;
@@ -88,6 +100,7 @@ export class VideoCache {
 		sinkData: VideoSinkData;
 		targetTime: number;
 	}): Promise<WrappedCanvas | null> {
+		if (sinkData.mode !== "mediabunny") return null;
 		if (!sinkData.iterator) return null;
 
 		try {
@@ -137,6 +150,7 @@ export class VideoCache {
 		sinkData: VideoSinkData;
 		time: number;
 	}): Promise<WrappedCanvas | null> {
+		if (sinkData.mode !== "mediabunny") return null;
 		try {
 			if (sinkData.prefetching && sinkData.prefetchPromise) {
 				await sinkData.prefetchPromise;
@@ -148,6 +162,7 @@ export class VideoCache {
 			}
 
 			sinkData.nextFrame = null;
+			if (!sinkData.sink) return null;
 			sinkData.iterator = sinkData.sink.canvases(time);
 			sinkData.lastTime = time;
 
@@ -178,7 +193,12 @@ export class VideoCache {
 	}
 
 	private startPrefetch({ sinkData }: { sinkData: VideoSinkData }): void {
-		if (sinkData.prefetching || !sinkData.iterator || sinkData.nextFrame) {
+		if (
+			sinkData.mode !== "mediabunny" ||
+			sinkData.prefetching ||
+			!sinkData.iterator ||
+			sinkData.nextFrame
+		) {
 			return;
 		}
 
@@ -191,6 +211,7 @@ export class VideoCache {
 	}: {
 		sinkData: VideoSinkData;
 	}): Promise<void> {
+		if (sinkData.mode !== "mediabunny") return;
 		if (!sinkData.iterator) {
 			sinkData.prefetching = false;
 			sinkData.prefetchPromise = null;
@@ -268,6 +289,7 @@ export class VideoCache {
 			});
 
 			this.sinks.set(mediaId, {
+				mode: "mediabunny",
 				sink,
 				iterator: null,
 				currentFrame: null,
@@ -275,11 +297,160 @@ export class VideoCache {
 				lastTime: -1,
 				prefetching: false,
 				prefetchPromise: null,
+				videoEl: null,
+				videoObjectUrl: null,
+				canvas: null,
 			});
 		} catch (error) {
-			console.error(`Failed to initialize video sink for ${mediaId}:`, error);
-			throw error;
+			console.warn(
+				`Mediabunny decode unavailable for ${mediaId}, falling back to <video>:`,
+				error,
+			);
+			await this.initializeHtmlVideoFallback({ mediaId, file });
 		}
+	}
+
+	private async initializeHtmlVideoFallback({
+		mediaId,
+		file,
+	}: {
+		mediaId: string;
+		file: File;
+	}): Promise<void> {
+		const videoEl = document.createElement("video");
+		videoEl.muted = true;
+		videoEl.playsInline = true;
+		videoEl.preload = "auto";
+
+		const objectUrl = URL.createObjectURL(file);
+		videoEl.src = objectUrl;
+
+		await new Promise<void>((resolve, reject) => {
+			const onLoaded = () => {
+				cleanup();
+				resolve();
+			};
+			const onError = () => {
+				cleanup();
+				reject(new Error("Video metadata load failed"));
+			};
+			const cleanup = () => {
+				videoEl.removeEventListener("loadedmetadata", onLoaded);
+				videoEl.removeEventListener("error", onError);
+			};
+
+			videoEl.addEventListener("loadedmetadata", onLoaded, { once: true });
+			videoEl.addEventListener("error", onError, { once: true });
+			videoEl.load();
+		});
+
+		const width = Math.max(1, videoEl.videoWidth || 1);
+		const height = Math.max(1, videoEl.videoHeight || 1);
+		const canvas =
+			typeof OffscreenCanvas !== "undefined"
+				? new OffscreenCanvas(width, height)
+				: Object.assign(document.createElement("canvas"), { width, height });
+
+		this.sinks.set(mediaId, {
+			mode: "html-video",
+			sink: null,
+			iterator: null,
+			currentFrame: null,
+			nextFrame: null,
+			lastTime: -1,
+			prefetching: false,
+			prefetchPromise: null,
+			videoEl,
+			videoObjectUrl: objectUrl,
+			canvas,
+		});
+	}
+
+	private async getHtmlVideoFrameAt({
+		sinkData,
+		time,
+	}: {
+		sinkData: VideoSinkData;
+		time: number;
+	}): Promise<WrappedCanvas | null> {
+		if (sinkData.mode !== "html-video") return null;
+		if (!sinkData.videoEl || !sinkData.canvas) return null;
+
+		const video = sinkData.videoEl;
+		const canvas = sinkData.canvas;
+
+		const target = Math.max(0, time);
+		const needsSeek = !Number.isFinite(video.currentTime)
+			? true
+			: Math.abs(video.currentTime - target) > 0.05;
+
+		if (needsSeek) {
+			try {
+				await this.seekHtmlVideo({ video, time: target });
+			} catch (e) {
+				console.warn("HTML video seek failed:", e);
+				return null;
+			}
+		}
+
+		const ctx =
+			canvas instanceof OffscreenCanvas
+				? canvas.getContext("2d")
+				: canvas.getContext("2d");
+		if (!ctx) return null;
+
+		try {
+			ctx.drawImage(video, 0, 0, (canvas as any).width, (canvas as any).height);
+		} catch (e) {
+			console.warn("HTML video drawImage failed:", e);
+			return null;
+		}
+
+		const durationGuess = Number.isFinite(video.duration) && video.duration > 0
+			? Math.min(1 / 24, Math.max(1 / 60, 1 / 30))
+			: 1 / 30;
+
+		return {
+			canvas: canvas as any,
+			timestamp: target,
+			duration: durationGuess,
+			close: () => {},
+		} as unknown as WrappedCanvas;
+	}
+
+	private async seekHtmlVideo({
+		video,
+		time,
+	}: {
+		video: HTMLVideoElement;
+		time: number;
+	}): Promise<void> {
+		await new Promise<void>((resolve, reject) => {
+			let timeoutId: number | null = null;
+
+			const cleanup = () => {
+				video.removeEventListener("seeked", onSeeked);
+				video.removeEventListener("error", onError);
+				if (timeoutId !== null) window.clearTimeout(timeoutId);
+			};
+			const onSeeked = () => {
+				cleanup();
+				resolve();
+			};
+			const onError = () => {
+				cleanup();
+				reject(new Error("Video seek error"));
+			};
+
+			video.addEventListener("seeked", onSeeked, { once: true });
+			video.addEventListener("error", onError, { once: true });
+			timeoutId = window.setTimeout(() => {
+				cleanup();
+				reject(new Error("Video seek timeout"));
+			}, 4000);
+
+			video.currentTime = time;
+		});
 	}
 
 	clearVideo({ mediaId }: { mediaId: string }): void {
@@ -287,6 +458,19 @@ export class VideoCache {
 		if (sinkData) {
 			if (sinkData.iterator) {
 				void sinkData.iterator.return();
+			}
+			if (sinkData.videoEl) {
+				try {
+					sinkData.videoEl.pause();
+				} catch {
+					// ignore
+				}
+				sinkData.videoEl.removeAttribute("src");
+				sinkData.videoEl.load();
+				sinkData.videoEl.remove();
+			}
+			if (sinkData.videoObjectUrl) {
+				URL.revokeObjectURL(sinkData.videoObjectUrl);
 			}
 
 			this.sinks.delete(mediaId);

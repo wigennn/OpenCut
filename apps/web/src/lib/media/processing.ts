@@ -195,6 +195,18 @@ export async function processMediaAssets({
 					});
 				} catch (error) {
 					console.warn("Video processing failed", error);
+					try {
+						const fallback = await generateVideoThumbnailViaHtmlVideo({
+							videoFile: file,
+							timeInSeconds: 1,
+						});
+						thumbnailUrl = fallback.thumbnailUrl;
+						duration = duration ?? fallback.duration;
+						width = width ?? fallback.width;
+						height = height ?? fallback.height;
+					} catch (fallbackError) {
+						console.warn("Video thumbnail fallback failed", fallbackError);
+					}
 				}
 			} else if (fileType === "audio") {
 				// For audio, we don't set width/height/fps (they'll be undefined)
@@ -228,6 +240,92 @@ export async function processMediaAssets({
 	}
 
 	return processedAssets;
+}
+
+async function generateVideoThumbnailViaHtmlVideo({
+	videoFile,
+	timeInSeconds,
+}: {
+	videoFile: File;
+	timeInSeconds: number;
+}): Promise<{
+	thumbnailUrl: string;
+	duration: number;
+	width: number;
+	height: number;
+}> {
+	const video = document.createElement("video");
+	video.muted = true;
+	video.playsInline = true;
+	video.preload = "auto";
+
+	const objectUrl = URL.createObjectURL(videoFile);
+	video.src = objectUrl;
+
+	try {
+		await new Promise<void>((resolve, reject) => {
+			const onLoaded = () => {
+				cleanup();
+				resolve();
+			};
+			const onError = () => {
+				cleanup();
+				reject(new Error("Could not load video metadata"));
+			};
+			const cleanup = () => {
+				video.removeEventListener("loadedmetadata", onLoaded);
+				video.removeEventListener("error", onError);
+			};
+
+			video.addEventListener("loadedmetadata", onLoaded, { once: true });
+			video.addEventListener("error", onError, { once: true });
+			video.load();
+		});
+
+		const target = Math.max(0, Math.min(timeInSeconds, Math.max(0, video.duration - 0.05)));
+		await new Promise<void>((resolve, reject) => {
+			let timeoutId: number | null = null;
+			const cleanup = () => {
+				video.removeEventListener("seeked", onSeeked);
+				video.removeEventListener("error", onError);
+				if (timeoutId !== null) window.clearTimeout(timeoutId);
+			};
+			const onSeeked = () => {
+				cleanup();
+				resolve();
+			};
+			const onError = () => {
+				cleanup();
+				reject(new Error("Video seek failed"));
+			};
+
+			video.addEventListener("seeked", onSeeked, { once: true });
+			video.addEventListener("error", onError, { once: true });
+			timeoutId = window.setTimeout(() => {
+				cleanup();
+				reject(new Error("Video seek timeout"));
+			}, 4000);
+
+			video.currentTime = target;
+		});
+
+		const width = Math.max(1, video.videoWidth || 1);
+		const height = Math.max(1, video.videoHeight || 1);
+		const thumbnailUrl = renderToThumbnailDataUrl({
+			width,
+			height,
+			draw: ({ context, width, height }) => {
+				context.drawImage(video, 0, 0, width, height);
+			},
+		});
+
+		return { thumbnailUrl, duration: video.duration, width, height };
+	} finally {
+		URL.revokeObjectURL(objectUrl);
+		video.removeAttribute("src");
+		video.load();
+		video.remove();
+	}
 }
 
 const getImageDimensions = ({
