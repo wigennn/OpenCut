@@ -2,6 +2,7 @@ import type { TProject, TProjectMetadata } from "@/types/project";
 import { getProjectDurationFromScenes } from "@/lib/scenes";
 import type { MediaAsset } from "@/types/assets";
 import { IndexedDBAdapter } from "./indexeddb-adapter";
+import { IndexedDBFileAdapter } from "./indexeddb-file-adapter";
 import { OPFSAdapter } from "./opfs-adapter";
 import type {
 	MediaAssetData,
@@ -85,7 +86,13 @@ class StorageService {
 			this.config.version,
 		);
 
-		const mediaAssetsAdapter = new OPFSAdapter(`media-files-${projectId}`);
+		const mediaAssetsAdapter = this.isOPFSSupported()
+			? new OPFSAdapter(`media-files-${projectId}`)
+			: new IndexedDBFileAdapter(
+					`${this.config.mediaDb}-files-${projectId}`,
+					"media-files",
+					this.config.version,
+				);
 
 		return { mediaMetadataAdapter, mediaAssetsAdapter };
 	}
@@ -484,7 +491,8 @@ class StorageService {
 	}
 
 	isFullySupported(): boolean {
-		return this.isIndexedDBSupported() && this.isOPFSSupported();
+		// For HTTP deployments OPFS may be unavailable; we fall back to IndexedDB for files.
+		return this.isIndexedDBSupported();
 	}
 }
 
